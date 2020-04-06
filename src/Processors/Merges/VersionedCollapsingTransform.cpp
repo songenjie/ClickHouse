@@ -25,8 +25,8 @@ VersionedCollapsingTransform::VersionedCollapsingTransform(
     , source_chunks(num_inputs)
     , cursors(num_inputs)
     , max_rows_in_queue(MAX_ROWS_IN_MULTIVERSION_QUEUE - 1)  /// -1 for +1 in FixedSizeDequeWithGaps's internal buffer
-    , current_keys(max_rows_in_queue)
     , chunk_allocator(num_inputs + max_rows_in_queue + 1) /// +1 just in case (for current_row)
+    , current_keys(max_rows_in_queue)
 {
     sign_column_number = header.getPositionByName(sign_column_);
 }

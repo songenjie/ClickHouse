@@ -53,11 +53,12 @@ private:
     SortingHeap<SortCursor> queue;
     bool is_queue_initialized = false;
 
+    using RowRef = detail::RowRefWithOwnedChunk;
+    const size_t max_rows_in_queue;
+
     /// Allocator must be destroyed after all RowRefs.
     detail::SharedChunkAllocator chunk_allocator;
 
-    using RowRef = detail::RowRefWithOwnedChunk;
-    const size_t max_rows_in_queue;
     /// Rows with the same primary key and sign.
     FixedSizeDequeWithGaps<RowRef> current_keys;
     Int8 sign_in_queue = 0;
