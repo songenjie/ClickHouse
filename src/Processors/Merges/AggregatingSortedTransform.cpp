@@ -48,8 +48,8 @@ namespace
 
             if (auto simple_aggr = dynamic_cast<const DataTypeCustomSimpleAggregateFunction *>(column.type->getCustomName()))
             {
-                auto type = column.type;
-                if (type.get() == recursiveRemoveLowCardinality(type).get())
+                auto type = recursiveRemoveLowCardinality(column.type);
+                if (type.get() == column.type.get())
                     type = nullptr;
 
                 // simple aggregate function
@@ -124,7 +124,7 @@ void AggregatingSortedTransform::updateCursor(Chunk chunk, size_t source_num)
         column = column->convertToFullColumnIfConst();
 
     for (auto & desc : columns_definition.columns_to_simple_aggregate)
-        if (desc.type_to_convert)
+        if (desc.inner_type)
             columns[desc.column_number] = recursiveRemoveLowCardinality(columns[desc.column_number]);
 
     chunk.setColumns(std::move(columns), num_rows);
@@ -163,10 +163,10 @@ void AggregatingSortedTransform::work()
 
         for (auto & desc : columns_definition.columns_to_simple_aggregate)
         {
-            if (desc.type_to_convert)
+            if (desc.inner_type)
             {
-                auto & from_type = header.getByPosition(desc.column_number).type;
-                auto & to_type = desc.type_to_convert;
+                auto & from_type = desc.inner_type;
+                auto & to_type = header.getByPosition(desc.column_number).type;
                 columns[desc.column_number] = recursiveTypeConversion(columns[desc.column_number], from_type, to_type);
             }
         }
