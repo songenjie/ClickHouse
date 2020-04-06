@@ -68,6 +68,17 @@ namespace
 
         return def;
     }
+
+    MutableColumns getMergedColumns(const Block & header)
+    {
+        MutableColumns columns;
+        columns.reserve(header.columns());
+
+        for (auto & column : header)
+            columns.emplace_back(recursiveRemoveLowCardinality(column.type)->createColumn());
+
+        return columns;
+    }
 }
 
 AggregatingSortedTransform::AggregatingSortedTransform(
@@ -75,7 +86,7 @@ AggregatingSortedTransform::AggregatingSortedTransform(
     SortDescription description_, size_t max_block_size)
     : IMergingTransform(num_inputs, header, header, true)
     , columns_definition(defineColumns(header, description_))
-    , merged_data(header.cloneEmptyColumns(), false, max_block_size)
+    , merged_data(getMergedColumns(header), false, max_block_size)
     , description(std::move(description_))
     , source_chunks(num_inputs)
     , cursors(num_inputs)
