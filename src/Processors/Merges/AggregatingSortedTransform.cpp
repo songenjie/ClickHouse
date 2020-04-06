@@ -77,12 +77,12 @@ namespace
         for (auto & desc : def.columns_to_simple_aggregate)
         {
             auto & type = header.getByPosition(desc.column_number).type;
-            columns.emplace_back(recursiveRemoveLowCardinality(type)->createColumn());
+            columns[desc.column_number] = recursiveRemoveLowCardinality(type)->createColumn();
         }
 
         for (size_t i = 0; i < columns.size(); ++i)
             if (!columns[i])
-                columns[i] =  header.getByPosition(i).type->createColumn();
+                columns[i] = header.getByPosition(i).type->createColumn();
 
         return columns;
     }
