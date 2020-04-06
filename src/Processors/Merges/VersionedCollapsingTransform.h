@@ -45,6 +45,12 @@ private:
     /// If it is not nullptr then it should be populated during execution
     WriteBuffer * out_row_sources_buf = nullptr;
 
+    using RowRef = detail::RowRefWithOwnedChunk;
+    const size_t max_rows_in_queue;
+
+    /// Allocator must be destroyed after all RowRefs.
+    detail::SharedChunkAllocator chunk_allocator;
+
     /// Chunks currently being merged.
     using SourceChunks = std::vector<detail::SharedChunkPtr>;
     SourceChunks source_chunks;
@@ -52,12 +58,6 @@ private:
 
     SortingHeap<SortCursor> queue;
     bool is_queue_initialized = false;
-
-    using RowRef = detail::RowRefWithOwnedChunk;
-    const size_t max_rows_in_queue;
-
-    /// Allocator must be destroyed after all RowRefs.
-    detail::SharedChunkAllocator chunk_allocator;
 
     /// Rows with the same primary key and sign.
     FixedSizeDequeWithGaps<RowRef> current_keys;
