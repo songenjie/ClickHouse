@@ -48,8 +48,8 @@ namespace
 
             if (auto simple_aggr = dynamic_cast<const DataTypeCustomSimpleAggregateFunction *>(column.type->getCustomName()))
             {
-                auto type = recursiveRemoveLowCardinality(column.type);
-                if (type.get() == column.type.get())
+                auto type = column.type;
+                if (type.get() == recursiveRemoveLowCardinality(type).get())
                     type = nullptr;
 
                 // simple aggregate function
