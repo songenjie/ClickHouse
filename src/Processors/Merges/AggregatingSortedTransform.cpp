@@ -80,7 +80,7 @@ namespace
             columns.emplace_back(recursiveRemoveLowCardinality(type)->createColumn());
         }
 
-        for (sizr_t i = 0; i < columns.size(); ++i)
+        for (size_t i = 0; i < columns.size(); ++i)
             if (!columns[i])
                 columns[i] =  header.getByPosition(i).type->createColumn();
 
