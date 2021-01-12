@@ -300,9 +300,12 @@ struct ContextShared
     mutable std::mutex storage_policies_mutex;
     /// Separate mutex for re-initialization of zookeeper session. This operation could take a long time and must not interfere with another operations.
     mutable std::mutex zookeeper_mutex;
+    mutable std::mutex cold_zookeeper_mutex;
 
     mutable zkutil::ZooKeeperPtr zookeeper;                 /// Client for ZooKeeper.
+    mutable zkutil::ZooKeeperPtr cold_zookeeper;                 /// Client for Cold ZooKeeper.
     ConfigurationPtr zookeeper_config;                      /// Stores zookeeper configs
+    ConfigurationPtr cold_zookeeper_config;                      /// Stores zookeeper Cold configs
 
     mutable std::mutex auxiliary_zookeepers_mutex;
     mutable std::map<String, zkutil::ZooKeeperPtr> auxiliary_zookeepers;    /// Map for auxiliary ZooKeeper clients.
@@ -1507,6 +1510,19 @@ zkutil::ZooKeeperPtr Context::getZooKeeper() const
     return shared->zookeeper;
 }
 
+zkutil::ZooKeeperPtr Context::getColdZooKeeper() const
+{
+    std::lock_guard lock(shared->cold_zookeeper_mutex);
+
+    const auto & config = shared->cold_zookeeper_config ? *shared->cold_zookeeper_config : getConfigRef();
+    if (!shared->cold_zookeeper)
+        shared->cold_zookeeper = std::make_shared<zkutil::ZooKeeper>(config, "cold_zookeeper");
+    else if (shared->cold_zookeeper->expired())
+        shared->cold_zookeeper = shared->cold_zookeeper->startNewSession();
+
+    return shared->cold_zookeeper;
+}
+
 zkutil::ZooKeeperPtr Context::getAuxiliaryZooKeeper(const String & name) const
 {
     std::lock_guard lock(shared->auxiliary_zookeepers_mutex);
@@ -1550,6 +1566,13 @@ void Context::reloadZooKeeperIfChanged(const ConfigurationPtr & config) const
     reloadZooKeeperIfChangedImpl(config, "zookeeper", shared->zookeeper);
 }
 
+void Context::reloadColdZooKeeperIfChanged(const ConfigurationPtr & config) const
+{
+    std::lock_guard lock(shared->cold_zookeeper_mutex);
+    shared->cold_zookeeper_config = config;
+    reloadZooKeeperIfChangedImpl(config, "cold_zookeeper", shared->cold_zookeeper);
+}
+
 void Context::reloadAuxiliaryZooKeepersConfigIfChanged(const ConfigurationPtr & config)
 {
     std::lock_guard lock(shared->auxiliary_zookeepers_mutex);
@@ -1574,6 +1597,10 @@ bool Context::hasZooKeeper() const
     return getConfigRef().has("zookeeper");
 }
 
+bool Context::hasColdZooKeeper() const
+{
+    return getConfigRef().has("cold_zookeeper");
+}
 
 void Context::setInterserverIOAddress(const String & host, UInt16 port)
 {

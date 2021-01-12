@@ -485,6 +485,7 @@ public:
     /// If the current session is expired at the time of the call, synchronously creates and returns a new session with the startNewSession() call.
     /// If no ZooKeeper configured, throws an exception.
     std::shared_ptr<zkutil::ZooKeeper> getZooKeeper() const;
+    std::shared_ptr<zkutil::ZooKeeper> getColdZooKeeper() const;
     /// Same as above but return a zookeeper connection from auxiliary_zookeepers configuration entry.
     std::shared_ptr<zkutil::ZooKeeper> getAuxiliaryZooKeeper(const String & name) const;
 
@@ -492,10 +493,12 @@ public:
     void reloadAuxiliaryZooKeepersConfigIfChanged(const ConfigurationPtr & config);
     /// Has ready or expired ZooKeeper
     bool hasZooKeeper() const;
+    bool hasColdZooKeeper() const;
     /// Reset current zookeeper session. Do not create a new one.
     void resetZooKeeper() const;
     // Reload Zookeeper
     void reloadZooKeeperIfChanged(const ConfigurationPtr & config) const;
+    void reloadColdZooKeeperIfChanged(const ConfigurationPtr & config) const;
 
     /// Create a cache of uncompressed blocks of specified size. This can be done only once.
     void setUncompressedCache(size_t max_size_in_bytes);

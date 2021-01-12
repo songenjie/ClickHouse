@@ -145,6 +145,12 @@ void StorageReplicatedMergeTree::setZooKeeper(zkutil::ZooKeeperPtr zookeeper)
     current_zookeeper = zookeeper;
 }
 
+void StorageReplicatedMergeTree::setColdZooKeeper(zkutil::ZooKeeperPtr zookeeper)
+{
+    std::lock_guard lock(cold_zookeeper_mutex);
+    cold_zookeeper = zookeeper;
+}
+
 zkutil::ZooKeeperPtr StorageReplicatedMergeTree::tryGetZooKeeper() const
 {
     std::lock_guard lock(current_zookeeper_mutex);
@@ -171,6 +177,19 @@ static std::string normalizeZooKeeperPath(std::string zookeeper_path)
     return zookeeper_path;
 }
 
+zkutil::ZooKeeperPtr StorageReplicatedMergeTree::tryGetColdZooKeeper() const
+{
+    std::lock_guard lock(cold_zookeeper_mutex);
+    return cold_zookeeper;
+}
+
+zkutil::ZooKeeperPtr StorageReplicatedMergeTree::getColdZooKeeper() const
+{
+    auto res = tryGetColdZooKeeper();
+    if (!res)
+        throw Exception("Cannot get Cold ZooKeeper", ErrorCodes::NO_ZOOKEEPER);
+    return res;
+}
 
 StorageReplicatedMergeTree::StorageReplicatedMergeTree(
     const String & zookeeper_path_,
@@ -252,6 +271,38 @@ StorageReplicatedMergeTree::StorageReplicatedMergeTree(
                 dropIfEmpty();
             throw;
         }
+    }
+
+
+    if (global_context.hasColdZooKeeper())
+    {
+        /// It's possible for getColdZooKeeper() to timeout if  zookeeper host(s) can't
+        /// be reached. In such cases Poco::Exception is thrown after a connection
+        /// timeout - refer to src/Common/ZooKeeper/ZooKeeperImpl.cpp:866 for more info.
+        ///
+        /// Side effect of this is that the CreateQuery gets interrupted and it exits.
+        /// But the data Directories for the tables being created aren't cleaned up.
+        /// This unclean state will hinder table creation on any retries and will
+        /// complain that the Directory for table already exists.
+        ///
+        /// To achieve a clean state on failed table creations, catch this error and
+        /// call dropIfEmpty() method only if the operation isn't ATTACH then proceed
+        /// throwing the exception. Without this, the Directory for the tables need
+        /// to be manually deleted before retrying the CreateQuery.
+        try
+        {
+            cold_zookeeper = global_context.getColdZooKeeper();
+        }
+        catch (...)
+        {
+            if (!attach)
+                dropIfEmpty();
+            throw;
+        }
+    }
+    else
+    {
+        cold_zookeeper = current_zookeeper;
     }
 
     bool skip_sanity_checks = false;
@@ -983,6 +1034,27 @@ void StorageReplicatedMergeTree::checkParts(bool skip_sanity_checks)
     for (const String & missing_name : expected_parts)
         if (!getActiveContainingPart(missing_name))
             parts_to_fetch.push_back(missing_name);
+
+    auto coldZookeeper = getColdZooKeeper();
+
+    if (!(coldZookeeper == zookeeper))
+    {
+        Strings expected_cold_parts_vec = coldZookeeper->getChildren(replica_path + "/parts");
+        /// Parts in ZK.
+        NameSet expected_cold_parts(expected_cold_parts_vec.begin(), expected_cold_parts_vec.end());
+
+        for (const auto & part : parts)
+            if (expected_cold_parts.count(part->name))
+                unexpected_parts.erase(part); /// this parts we will place to detached with ignored_ prefix
+
+        //In theory, it doesn't need to be added here
+        for (const String & missing_name : expected_cold_parts)
+            if (!getActiveContainingPart(missing_name))
+            {
+                LOG_INFO(log, "need fetch  history part:{} ", missing_name);
+                parts_to_fetch.push_back(missing_name);
+            }
+    }
 
     /** To check the adequacy, for the parts that are in the FS, but not in ZK, we will only consider not the most recent parts.
       * Because unexpected new parts usually arise only because they did not have time to enroll in ZK with a rough restart of the server.
@@ -1836,6 +1908,8 @@ bool StorageReplicatedMergeTree::executeFetch(LogEntry & entry)
 void StorageReplicatedMergeTree::executeDropRange(const LogEntry & entry)
 {
     auto drop_range_info = MergeTreePartInfo::fromPartName(entry.new_part_name, format_version);
+    //get drop parition_id state
+    String partition_state = getPartitionState(drop_range_info.partition_id);
     queue.removePartProducingOpsInRange(getZooKeeper(), drop_range_info, entry);
 
     if (entry.detach)
@@ -1867,7 +1941,7 @@ void StorageReplicatedMergeTree::executeDropRange(const LogEntry & entry)
     }
 
     /// Forcibly remove parts from ZooKeeper
-    tryRemovePartsFromZooKeeperWithRetries(parts_to_remove);
+    tryRemovePartsFromZooKeeperWithRetries(parts_to_remove, 5, partition_state);
 
     if (entry.detach)
         LOG_DEBUG(log, "Detached {} parts inside {}.", parts_to_remove.size(), entry.new_part_name);
@@ -5313,16 +5387,18 @@ void StorageReplicatedMergeTree::clearOldPartsAndRemoveFromZK()
 }
 
 
-bool StorageReplicatedMergeTree::tryRemovePartsFromZooKeeperWithRetries(DataPartsVector & parts, size_t max_retries)
+bool StorageReplicatedMergeTree::tryRemovePartsFromZooKeeperWithRetries(DataPartsVector & parts, size_t max_retries, String partition_state)
 {
     Strings part_names_to_remove;
     for (const auto & part : parts)
         part_names_to_remove.emplace_back(part->name);
 
-    return tryRemovePartsFromZooKeeperWithRetries(part_names_to_remove, max_retries);
+    return tryRemovePartsFromZooKeeperWithRetries(part_names_to_remove, max_retries, partition_state);
 }
 
-bool StorageReplicatedMergeTree::tryRemovePartsFromZooKeeperWithRetries(const Strings & part_names, size_t max_retries)
+//tryRemovePartsFromZooKeeperWithRetries
+bool StorageReplicatedMergeTree::tryRemovePartsFromZooKeeperWithRetries(
+    const Strings & part_names, size_t max_retries, String partition_state)
 {
     size_t num_tries = 0;
     bool success = false;
@@ -5334,7 +5410,7 @@ bool StorageReplicatedMergeTree::tryRemovePartsFromZooKeeperWithRetries(const St
             ++num_tries;
             success = true;
 
-            auto zookeeper = getZooKeeper();
+            auto zookeeper = partition_state.compare(PARTITION_COLD) == 0 ? getColdZooKeeper() : getZooKeeper();
 
             std::vector<std::future<Coordination::ExistsResponse>> exists_futures;
             exists_futures.reserve(part_names.size());
@@ -6107,6 +6183,19 @@ bool StorageReplicatedMergeTree::dropPart(
 
         return true;
     }
+}
+
+String StorageReplicatedMergeTree::getPartitionState(String & partition_id) const
+{
+    zkutil::ZooKeeperPtr zookeeper = getZooKeeper();
+    String partition_state_path = zookeeper_path + "/block_numbers/" + partition_id + "/State";
+    String partition_state = PARTITION_HOT;
+
+    if (zookeeper->exists(partition_state_path))
+    {
+        return zookeeper->get(partition_state_path);
+    }
+    return partition_state;
 }
 
 bool StorageReplicatedMergeTree::dropAllPartsInPartition(

@@ -76,6 +76,13 @@ namespace DB
 
 class StorageReplicatedMergeTree final : public ext::shared_ptr_helper<StorageReplicatedMergeTree>, public MergeTreeData
 {
+
+#ifndef PARTITION_COLD
+#define PARTITION_COLD "COLD"
+#endif
+#ifndef PARTITION_HOT
+#define PARTITION_HOT "HOT"
+#endif
     friend struct ext::shared_ptr_helper<StorageReplicatedMergeTree>;
 public:
     void startup() override;
@@ -233,11 +240,18 @@ private:
     using LogEntryPtr = LogEntry::Ptr;
 
     zkutil::ZooKeeperPtr current_zookeeper;        /// Use only the methods below.
-    mutable std::mutex current_zookeeper_mutex;    /// To recreate the session in the background thread.
+    zkutil::ZooKeeperPtr cold_zookeeper;
+
+    mutable std::mutex current_zookeeper_mutex;
+    mutable std::mutex cold_zookeeper_mutex;    /// To recreate the session in the background thread.
 
     zkutil::ZooKeeperPtr tryGetZooKeeper() const;
     zkutil::ZooKeeperPtr getZooKeeper() const;
     void setZooKeeper(zkutil::ZooKeeperPtr zookeeper);
+
+    zkutil::ZooKeeperPtr tryGetColdZooKeeper() const;
+    zkutil::ZooKeeperPtr getColdZooKeeper() const;
+    void setColdZooKeeper(zkutil::ZooKeeperPtr zookeeper);
 
     /// If true, the table is offline and can not be written to it.
     std::atomic_bool is_readonly {false};
@@ -381,8 +395,8 @@ private:
     void removePartsFromZooKeeper(zkutil::ZooKeeperPtr & zookeeper, const Strings & part_names,
                                   NameSet * parts_should_be_retried = nullptr);
 
-    bool tryRemovePartsFromZooKeeperWithRetries(const Strings & part_names, size_t max_retries = 5);
-    bool tryRemovePartsFromZooKeeperWithRetries(DataPartsVector & parts, size_t max_retries = 5);
+    bool tryRemovePartsFromZooKeeperWithRetries(const Strings & part_names, size_t max_retries = 5, String partition_state = PARTITION_HOT);
+    bool tryRemovePartsFromZooKeeperWithRetries(DataPartsVector & parts, size_t max_retries = 5, String partition_state = PARTITION_HOT);
 
     /// Removes a part from ZooKeeper and adds a task to the queue to download it. It is supposed to do this with broken parts.
     void removePartAndEnqueueFetch(const String & part_name);
@@ -566,6 +580,8 @@ private:
     bool dropPart(zkutil::ZooKeeperPtr & zookeeper, String part_name, LogEntry & entry, bool detach, bool throw_if_noop);
     bool dropAllPartsInPartition(
         zkutil::ZooKeeper & zookeeper, String & partition_id, LogEntry & entry, bool detach);
+
+    String getPartitionState(String & partition_id) const;
 
     // Partition helpers
     void dropPartition(const ASTPtr & partition, bool detach, bool drop_part, const Context & query_context, bool throw_if_noop) override;
