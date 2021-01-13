@@ -1037,7 +1037,7 @@ void StorageReplicatedMergeTree::checkParts(bool skip_sanity_checks)
 
     auto coldZookeeper = getColdZooKeeper();
 
-    if (!(coldZookeeper == zookeeper))
+    if (!(coldZookeeper == zookeeper) && coldZookeeper->exists(replica_path + "/parts"))
     {
         Strings expected_cold_parts_vec = coldZookeeper->getChildren(replica_path + "/parts");
         /// Parts in ZK.
